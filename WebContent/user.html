@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Insert title here</title>
+<script type="text/javascript" src="js/user.js">
+	
+</script>
+</head>
+<body>
+	<input type="file" id="fileUpload">
+	<br>
+	<br>
+	请选择客户:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<select id="select">
+</select>
+	<br><br>
+	<input type="radio" id="radio0" name="action" value="fillExcel"
+		checked="checked" onclick="radioChange(this)">补全信息
+	<input type="radio" id="radio1" name="action" value="updateAndCreateXML"
+		onclick="radioChange(this)">生成xml
+	<br>
+	<br>
+	<input type="button" id="button" value="send">
+</body>
+</html>
