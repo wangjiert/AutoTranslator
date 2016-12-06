@@ -41,6 +41,12 @@ function downloadFile() {
 }
 function onReady() {
 	if (xhr.readyState == 4 && xhr.status == 200) {
+		if(xhr.responseText != "补全Excel完成!!!"){
+			alert(xhr.responseText);
+			button.value = "send";
+			button.disabled = false;
+			return;
+		}
 		button.value = "下载";
 		button.removeEventListener("click", handle);
 		button.addEventListener("click", downloadFile);
