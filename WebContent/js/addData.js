@@ -59,8 +59,11 @@ function onReady() {
 			button.value = "download";
 			alert("更新数据库时，发现冲突!!!");
 		}
-		else {
+		else if (xhr.responseText == "处理完成") {
 			alert("更新数据库完成!!!");
+		}
+		else {
+			alert(xhr.responseText);
 		}
 		button.disabled = false;
 	}
