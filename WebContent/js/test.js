@@ -28,14 +28,8 @@ function radioSelect(radio) {
 	console.log(method);
 }
 function send() {
-	var select = document.getElementById('select');
-	var file = document.getElementById('fileUpload');
-	if(file.value == null||file.value ==""){
-		alert("请选择上传文件!!!");
-		return;
-	}
-	button.disabled = true;
 	if(button.value == "download") {
+		button.disabled = true;
 		var form = document.createElement("form");
 		form.method = "post";
 		form.action = "manager.do?cmd=download";
@@ -44,8 +38,19 @@ function send() {
 		button.disabled = false;
 		return;
 	}
+	var select = document.getElementById('select');
+	var file = document.getElementById('fileUpload');
+	if(file.value == null||file.value ==""){
+		alert("请选择上传文件!!!");
+		return;
+	}
+	button.disabled = true;
+	var length = file.files.length;
 	var fd = new FormData();
-	fd.append("fileUpload", file.files[0]);
+	for (var i = 0; i < length; i++) {
+		fd.append("fileUpload"+i, file.files[i]);
+	}
+	fd.append("fileCount",length+"");
 	fd.append("cmd", "addData");
 	fd.append("method", method);
 	fd.append("customName",select.options[select.selectedIndex].text);
@@ -55,12 +60,11 @@ function send() {
 }
 function onReady() {
 	if (xhr.readyState == 4 && xhr.status == 200) {
-		if(xhr.responseText == "comflict") {
-			button.value = "download";
-			alert("更新数据库时，发现冲突!!!");
+		if(xhr.responseText == "Successed") {
+			alert("处理完成");
 		}
-		else if (xhr.responseText == "处理完成") {
-			alert("更新数据库完成!!!");
+		else if(xhr.responseText == "Successed with comflict") {
+			button.value = "download";
 		}
 		else {
 			alert(xhr.responseText);
