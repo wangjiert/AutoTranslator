@@ -20,6 +20,7 @@ import java.util.Iterator;
 import java.util.Properties;
 import java.util.Random;
 
+import javax.activation.MimetypesFileTypeMap;
 import javax.servlet.ServletException;
 import javax.servlet.annotation.MultipartConfig;
 import javax.servlet.http.HttpServlet;
@@ -277,7 +278,7 @@ public class HandlerServlet extends HttpServlet {
 		return path;
 	}
 
-	private void handleComflict(String fileName, String customName, HashSet<Comflict> hashSet,
+	private void handleComflict(String directory, String customName, HashSet<Comflict> hashSet,
 			HttpServletRequest request) {
 		XSSFWorkbook workbook = new XSSFWorkbook();
 		XSSFSheet sheet = workbook.createSheet("sheet1");
@@ -307,11 +308,11 @@ public class HandlerServlet extends HttpServlet {
 			}
 		}
 		try (FileOutputStream fos = new FileOutputStream(
-				fileName.substring(0, fileName.lastIndexOf("/") + 1) + customName + ".xlsx");) {
+				directory + customName + ".xlsx");) {
 			workbook.write(fos);
 			workbook.close();
 			request.getSession(true).setAttribute("fileName",
-					fileName.substring(0, fileName.lastIndexOf("/") + 1) + customName + ".xlsx");
+					directory + customName + ".xlsx");
 		} catch (FileNotFoundException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -454,129 +455,451 @@ public class HandlerServlet extends HttpServlet {
 		}
 	}
 
+	private void updateAndCreateXML(HttpServletRequest request, HttpServletResponse response) {
+		String customName = request.getParameter("customName");
+		HashSet<Comflict> comflicts = new HashSet<>();
+		String directory = downloadFiles(request);
+		String files[] = new File(directory).list();
+		String tagName = "";
+		Connection conn = null;
+		PreparedStatement pstmt0 = null;
+		PreparedStatement pstmt1 = null;
+		PreparedStatement pstmt2 = null;
+		PreparedStatement pstmt3 = null;
+		ResultSet rs = null;
+		FileInputStream fio = null;
+		XSSFWorkbook workbook = null;
+		try {
+			conn = ds.getConnection();
+			HashSet<String> languages = new HashSet<>();
+			pstmt0 = conn.prepareStatement(
+					"select language_name from custom,language,custom_language where custom.id=custom_language.custom_id and language.id=custom_language.language_id and custom_name=?");
+			pstmt0.setString(1, customName);
+			rs = pstmt0.executeQuery();
+			String sql = "";
+			while (rs.next()) {
+				languages.add(rs.getString("language_name"));
+				sql += ",null";
+			}
+			rs.close();
+			pstmt0.close();
+			pstmt1 = conn.prepareStatement("select id from entries where entry_name=?");
+			pstmt2 = conn.prepareStatement("insert into entries values(null,?)");
+			pstmt3 = conn.prepareStatement("insert into " + customName + " values(null,?" + sql + ")");
+			fio = new FileInputStream(files[0]);
+			workbook = new XSSFWorkbook(fio);
+			Iterator<Sheet> iterator = workbook.iterator();
+			while (iterator.hasNext()) {
+				XSSFSheet sheet = (XSSFSheet) iterator.next();
+				if (!workbook.isSheetHidden(workbook.getSheetIndex(sheet))) {
+					HashMap<Integer, PreparedStatement[]> hashMap = new HashMap<>();
+					int rowNums = sheet.getLastRowNum();
+					XSSFRow row = sheet.getRow(0);
+					int columns = row.getLastCellNum();
+					HashSet<Integer> hashSetXML = new HashSet<>();
+					for (int i = 2; i <= columns; i++) {
+						XSSFCell cell = row.getCell(i);
+						if (cell != null && cell.toString().length() > 0) {
+							if (!languages.contains(cell.toString().trim())) {
+								response.getWriter().write("excel中包含客户不支持的语言!!!");
+								for (int index_local : hashMap.keySet()) {
+									for (PreparedStatement stmt : hashMap.get(index_local)) {
+										stmt.close();
+									}
+								}
+								return;
+							}
+							hashSetXML.add(i);
+							PreparedStatement[] stmtArray = new PreparedStatement[] {
+									conn.prepareStatement("select " + cell.toString().trim() + " from " + customName
+											+ " where entry_id=?"),
+									conn.prepareStatement("update " + customName + " set " + cell.toString().trim()
+											+ "=? where entry_id=?") };
+							hashMap.put(i, stmtArray);
+						}
+					}
+
+					if (hashMap.size() == 0) {
+						response.getWriter().write("sheet:"+sheet.getSheetName()+"中，第一行没有添加语言!!!");
+						return;
+					}
+					readExcel(sheet, hashSetXML, directory);
+					
+					for (int i = 1; i <= rowNums; i++) {
+
+						row = sheet.getRow(i);
+						if (row == null) {
+							continue;
+						}
+						XSSFCell cell0 = row.getCell(0);
+						if (cell0 != null && cell0.toString().length() > 0) {
+							tagName = cell0.toString();
+						}
+						XSSFCell cell1 = row.getCell(1);
+						if (cell1 == null || cell1.toString().length() == 0) {
+							continue;
+						}
+
+						pstmt1.setString(1, cell1.toString());
+						rs = pstmt1.executeQuery();
+						int entry_id = -1;
+						if (rs.next()) {
+							entry_id = rs.getInt("id");
+							rs.close();
+							for (int index_local : hashMap.keySet()) {
+								XSSFCell cell_local = row.getCell(index_local);
+								if (cell_local == null || cell_local.toString().length() == 0) {
+									continue;
+								}
+								hashMap.get(index_local)[0].setInt(1, entry_id);
+								rs = hashMap.get(index_local)[0].executeQuery();
+								if (rs.next()) {
+									if (rs.getString(1) == null) {
+										rs.close();
+										hashMap.get(index_local)[1].setString(1, cell_local.toString());
+										hashMap.get(index_local)[1].setInt(2, entry_id);
+										int result = hashMap.get(index_local)[1].executeUpdate();
+										if (result != 1) {
+											response.getWriter().write("添加词条失败!!!");
+											return;
+										}
+									} else if (rs.getString(1).equals(cell_local.toString())) {
+										rs.close();
+									} else {
+											Comflict comflict = new Comflict();
+											comflict.setSheetName(sheet.getSheetName());
+											comflict.setTagName(tagName);
+											comflict.setEnglish(cell1.toString());
+											comflict.setLanguage(sheet.getRow(0).getCell(index_local).toString());
+											comflict.setOldTranslator(rs.getString(1));
+											comflict.setNewTranslator(cell_local.toString());
+											comflicts.add(comflict);
+											rs.close();
+									}
+								} else {
+									rs.close();
+									pstmt3.setInt(1, entry_id);
+									int result = pstmt3.executeUpdate();
+									if (result != 1) {
+										response.getWriter().write("添加词条失败!!!");
+										return;
+									}
+									hashMap.get(index_local)[1].setString(1, cell_local.toString());
+									hashMap.get(index_local)[1].setInt(2, entry_id);
+									result = hashMap.get(index_local)[1].executeUpdate();
+									if (result != 1) {
+										response.getWriter().write("添加词条失败!!!");
+										return;
+									}
+								}
+							}
+						} else {
+							rs.close();
+							pstmt2.setString(1, cell1.toString());
+							int result = pstmt2.executeUpdate();
+							if (result != 1) {
+								response.getWriter().write("添加词条失败!!!");
+								return;
+							}
+							pstmt1.setString(1, cell1.toString());
+							rs = pstmt1.executeQuery();
+							if (rs.next()) {
+								entry_id = rs.getInt("id");
+							}
+							rs.close();
+							pstmt3.setInt(1, entry_id);
+							result = pstmt3.executeUpdate();
+							if (result != 1) {
+								response.getWriter().write("添加词条失败!!!");
+								return;
+							}
+							for (int index_local : hashMap.keySet()) {
+								XSSFCell cell_local = row.getCell(index_local);
+								if (cell_local == null || cell_local.toString().length() == 0) {
+									continue;
+								}
+								hashMap.get(index_local)[1].setString(1, cell_local.toString());
+								hashMap.get(index_local)[1].setInt(2, entry_id);
+								result = hashMap.get(index_local)[1].executeUpdate();
+								if (result != 1) {
+									response.getWriter().write("添加词条失败!!!");
+									return;
+								}
+							}
+						}
+					}
+					for (int index_local : hashMap.keySet()) {
+						for (PreparedStatement stmt : hashMap.get(index_local)) {
+							stmt.close();
+						}
+					}
+					hashMap.clear();
+				}
+			}
+		}catch (IOException | SQLException e) {
+			e.printStackTrace();
+		} finally {
+			close(rs);
+			close(pstmt0);
+			close(pstmt1);
+			close(pstmt2);
+			close(pstmt3);
+			close(conn);
+			close(fio);
+			close(workbook);
+			File temp = new File(files[0]);
+			temp.delete();
+			if (comflicts.size() != 0) {
+				handleComflict(directory, customName, comflicts, request);
+				handlerComflictFinish(true, response);
+			} else {
+				handlerComflictFinish(false, response);
+			}
+				try {
+					
+					Runtime.getRuntime()
+							.exec(new String[] { "/bin/sh", "-c", "cd " + directory + ";tar -czf out.tar.gz " });
+					request.getSession(true).setAttribute("fileName",
+							directory + "out.tar.gz");
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+
+			
+
+		}
+	}
+
 	private void addData(HttpServletRequest request, HttpServletResponse response, boolean createXML) {
-		/*
-		 * HashSet<Comflict> comflicts = new HashSet<>(); String customName =
-		 * request.getParameter("customName"); String fileName =
-		 * downloadFile(request); String type = new
-		 * MimetypesFileTypeMap().getContentType(fileName);
-		 * if(fileName.endsWith(".xml")){ updateDBByXML(fileName); return; }
-		 * return;
-		 * 
-		 * String method = request.getParameter("method"); String tagName = "";
-		 * Connection conn = null; PreparedStatement pstmt0 = null;
-		 * PreparedStatement pstmt1 = null; PreparedStatement pstmt2 = null;
-		 * PreparedStatement pstmt3 = null; ResultSet rs = null; FileInputStream
-		 * fio = null; XSSFWorkbook workbook = null; try { conn =
-		 * ds.getConnection(); HashSet<String> languages = new HashSet<>();
-		 * pstmt0 = conn.prepareStatement(
-		 * "select language_name from custom,language,custom_language where custom.id=custom_language.custom_id and language.id=custom_language.language_id and custom_name=?"
-		 * ); pstmt0.setString(1, customName); rs = pstmt0.executeQuery();
-		 * String sql = ""; while (rs.next()) {
-		 * languages.add(rs.getString("language_name")); sql += ",null"; }
-		 * rs.close(); pstmt0.close(); pstmt1 =
-		 * conn.prepareStatement("select id from entries where entry_name=?");
-		 * pstmt2 = conn.prepareStatement("insert into entries values(null,?)");
-		 * pstmt3 = conn.prepareStatement("insert into " + customName +
-		 * " values(null,?" + sql + ")"); fio = new FileInputStream(fileName);
-		 * workbook = new XSSFWorkbook(fio); Iterator<Sheet> iterator =
-		 * workbook.iterator(); while (iterator.hasNext()) { XSSFSheet sheet =
-		 * (XSSFSheet) iterator.next(); if
-		 * (!workbook.isSheetHidden(workbook.getSheetIndex(sheet))) {
-		 * HashMap<Integer, PreparedStatement[]> hashMap = new HashMap<>(); int
-		 * rowNums = sheet.getLastRowNum(); XSSFRow row = sheet.getRow(0); int
-		 * columns = row.getLastCellNum(); HashSet<Integer> hashSetXML = new
-		 * HashSet<>(); for (int i = 2; i <= columns; i++) { XSSFCell cell =
-		 * row.getCell(i); if (cell != null && cell.toString().length() > 0) {
-		 * if (!languages.contains(cell.toString().trim())) {
-		 * response.getWriter().write("excel中包含客户不支持的语言!!!"); for (int
-		 * index_local : hashMap.keySet()) { for (PreparedStatement stmt :
-		 * hashMap.get(index_local)) { stmt.close(); } }
-		 * System.out.println("语言是:" + cell.toString()); return; } if
-		 * (createXML) { hashSetXML.add(i); } PreparedStatement[] stmtArray =
-		 * new PreparedStatement[] { conn.prepareStatement("select " +
-		 * cell.toString().trim() + " from " + customName +
-		 * " where entry_id=?"), conn.prepareStatement("update " + customName +
-		 * " set " + cell.toString().trim() + "=? where entry_id=?") };
-		 * hashMap.put(i, stmtArray); } }
-		 * 
-		 * if (hashMap.size() == 0) {
-		 * response.getWriter().write("第一行没有添加语音!!!"); return; } if (createXML)
-		 * { readExcel(sheet, hashSetXML, fileName.substring(0,
-		 * fileName.lastIndexOf("/") + 1)); } for (int i = 1; i <= rowNums; i++)
-		 * {
-		 * 
-		 * row = sheet.getRow(i); if (row == null) { continue; } XSSFCell cell0
-		 * = row.getCell(0); if (cell0 != null && cell0.toString().length() > 0)
-		 * { tagName = cell0.toString(); } XSSFCell cell1 = row.getCell(1); if
-		 * (cell1 == null || cell1.toString().length() == 0) { continue; }
-		 * 
-		 * pstmt1.setString(1, cell1.toString()); rs = pstmt1.executeQuery();
-		 * int entry_id = -1; if (rs.next()) { entry_id = rs.getInt("id");
-		 * rs.close(); for (int index_local : hashMap.keySet()) { XSSFCell
-		 * cell_local = row.getCell(index_local); if (cell_local == null ||
-		 * cell_local.toString().length() == 0) { continue; }
-		 * hashMap.get(index_local)[0].setInt(1, entry_id); rs =
-		 * hashMap.get(index_local)[0].executeQuery(); if (rs.next()) { if
-		 * (rs.getString(1) == null) { rs.close();
-		 * hashMap.get(index_local)[1].setString(1, cell_local.toString());
-		 * hashMap.get(index_local)[1].setInt(2, entry_id); int result =
-		 * hashMap.get(index_local)[1].executeUpdate(); if (result != 1) {
-		 * response.getWriter().write("添加词条失败!!!"); return; } } else if
-		 * (rs.getString(1).equals(cell_local.toString())) { rs.close(); } else
-		 * { System.out.println("confilct"); if (method.equals("create")) {
-		 * Comflict comflict = new Comflict();
-		 * comflict.setSheetName(sheet.getSheetName());
-		 * comflict.setTagName(tagName); comflict.setEnglish(cell1.toString());
-		 * comflict.setLanguage(sheet.getRow(0).getCell(index_local).toString())
-		 * ; comflict.setOldTranslator(rs.getString(1));
-		 * comflict.setNewTranslator(cell_local.toString());
-		 * comflicts.add(comflict); } else {
-		 * hashMap.get(index_local)[1].setString(1, cell_local.toString());
-		 * hashMap.get(index_local)[1].setInt(2, entry_id); int result =
-		 * hashMap.get(index_local)[1].executeUpdate(); if (result != 1) {
-		 * response.getWriter().write("添加词条失败!!!"); return; } } rs.close(); } }
-		 * else { rs.close(); pstmt3.setInt(1, entry_id); int result =
-		 * pstmt3.executeUpdate(); if (result != 1) {
-		 * response.getWriter().write("添加词条失败!!!"); return; }
-		 * hashMap.get(index_local)[1].setString(1, cell_local.toString());
-		 * hashMap.get(index_local)[1].setInt(2, entry_id); result =
-		 * hashMap.get(index_local)[1].executeUpdate(); if (result != 1) {
-		 * response.getWriter().write("添加词条失败!!!"); return; } } } } else {
-		 * rs.close(); pstmt2.setString(1, cell1.toString()); int result =
-		 * pstmt2.executeUpdate(); if (result != 1) {
-		 * response.getWriter().write("添加词条失败!!!"); return; }
-		 * pstmt1.setString(1, cell1.toString()); rs = pstmt1.executeQuery(); if
-		 * (rs.next()) { entry_id = rs.getInt("id"); } rs.close();
-		 * pstmt3.setInt(1, entry_id); result = pstmt3.executeUpdate(); if
-		 * (result != 1) { response.getWriter().write("添加词条失败!!!"); return; }
-		 * for (int index_local : hashMap.keySet()) { XSSFCell cell_local =
-		 * row.getCell(index_local); if (cell_local == null ||
-		 * cell_local.toString().length() == 0) { continue; }
-		 * hashMap.get(index_local)[1].setString(1, cell_local.toString());
-		 * hashMap.get(index_local)[1].setInt(2, entry_id); result =
-		 * hashMap.get(index_local)[1].executeUpdate(); if (result != 1) {
-		 * response.getWriter().write("添加词条失败!!!"); return; } } } } for (int
-		 * index_local : hashMap.keySet()) { for (PreparedStatement stmt :
-		 * hashMap.get(index_local)) { stmt.close(); } } hashMap.clear(); } } }
-		 * catch (IOException | SQLException e) { e.printStackTrace(); } finally
-		 * { close(rs); close(pstmt0); close(pstmt1); close(pstmt2);
-		 * close(pstmt3); close(conn); close(fio); close(workbook); File file =
-		 * new File(fileName); file.delete(); if (comflicts.size() != 0) {
-		 * handleComflict(fileName, customName, comflicts, request);
-		 * handlerComflictFinish(true, response); } else {
-		 * handlerComflictFinish(false, response); } if (createXML) { try {
-		 * String local_var = fileName.substring(0, fileName.lastIndexOf("/") +
-		 * 1); Runtime.getRuntime() .exec(new String[] { "/bin/sh", "-c", "cd "
-		 * + local_var + ";tar -czf out.tar.gz *" });
-		 * request.getSession(true).setAttribute("fileName",
-		 * fileName.substring(0, fileName.lastIndexOf("/") + 1) + "out.tar.gz");
-		 * } catch (IOException e) { e.printStackTrace(); }
-		 * 
-		 * }
-		 * 
-		 * }
-		 */
+		HashSet<Comflict> comflicts = new HashSet<>();
+		String customName = request.getParameter("customName");
+		String fileName = downloadFile(request);
+
+		String method = request.getParameter("method");
+		String tagName = "";
+		Connection conn = null;
+		PreparedStatement pstmt0 = null;
+		PreparedStatement pstmt1 = null;
+		PreparedStatement pstmt2 = null;
+		PreparedStatement pstmt3 = null;
+		ResultSet rs = null;
+		FileInputStream fio = null;
+		XSSFWorkbook workbook = null;
+		try {
+			conn = ds.getConnection();
+			HashSet<String> languages = new HashSet<>();
+			pstmt0 = conn.prepareStatement(
+					"select language_name from custom,language,custom_language where custom.id=custom_language.custom_id and language.id=custom_language.language_id and custom_name=?");
+			pstmt0.setString(1, customName);
+			rs = pstmt0.executeQuery();
+			String sql = "";
+			while (rs.next()) {
+				languages.add(rs.getString("language_name"));
+				sql += ",null";
+			}
+			rs.close();
+			pstmt0.close();
+			pstmt1 = conn.prepareStatement("select id from entries where entry_name=?");
+			pstmt2 = conn.prepareStatement("insert into entries values(null,?)");
+			pstmt3 = conn.prepareStatement("insert into " + customName + " values(null,?" + sql + ")");
+			fio = new FileInputStream(fileName);
+			workbook = new XSSFWorkbook(fio);
+			Iterator<Sheet> iterator = workbook.iterator();
+			while (iterator.hasNext()) {
+				XSSFSheet sheet = (XSSFSheet) iterator.next();
+				if (!workbook.isSheetHidden(workbook.getSheetIndex(sheet))) {
+					HashMap<Integer, PreparedStatement[]> hashMap = new HashMap<>();
+					int rowNums = sheet.getLastRowNum();
+					XSSFRow row = sheet.getRow(0);
+					int columns = row.getLastCellNum();
+					HashSet<Integer> hashSetXML = new HashSet<>();
+					for (int i = 2; i <= columns; i++) {
+						XSSFCell cell = row.getCell(i);
+						if (cell != null && cell.toString().length() > 0) {
+							if (!languages.contains(cell.toString().trim())) {
+								response.getWriter().write("excel中包含客户不支持的语言!!!");
+								for (int index_local : hashMap.keySet()) {
+									for (PreparedStatement stmt : hashMap.get(index_local)) {
+										stmt.close();
+									}
+								}
+								System.out.println("语言是:" + cell.toString());
+								return;
+							}
+							if (createXML) {
+								hashSetXML.add(i);
+							}
+							PreparedStatement[] stmtArray = new PreparedStatement[] {
+									conn.prepareStatement("select " + cell.toString().trim() + " from " + customName
+											+ " where entry_id=?"),
+									conn.prepareStatement("update " + customName + " set " + cell.toString().trim()
+											+ "=? where entry_id=?") };
+							hashMap.put(i, stmtArray);
+						}
+					}
+
+					if (hashMap.size() == 0) {
+						response.getWriter().write("第一行没有添加语音!!!");
+						return;
+					}
+					if (createXML) {
+						readExcel(sheet, hashSetXML, fileName.substring(0, fileName.lastIndexOf("/") + 1));
+					}
+					for (int i = 1; i <= rowNums; i++) {
+
+						row = sheet.getRow(i);
+						if (row == null) {
+							continue;
+						}
+						XSSFCell cell0 = row.getCell(0);
+						if (cell0 != null && cell0.toString().length() > 0) {
+							tagName = cell0.toString();
+						}
+						XSSFCell cell1 = row.getCell(1);
+						if (cell1 == null || cell1.toString().length() == 0) {
+							continue;
+						}
+
+						pstmt1.setString(1, cell1.toString());
+						rs = pstmt1.executeQuery();
+						int entry_id = -1;
+						if (rs.next()) {
+							entry_id = rs.getInt("id");
+							rs.close();
+							for (int index_local : hashMap.keySet()) {
+								XSSFCell cell_local = row.getCell(index_local);
+								if (cell_local == null || cell_local.toString().length() == 0) {
+									continue;
+								}
+								hashMap.get(index_local)[0].setInt(1, entry_id);
+								rs = hashMap.get(index_local)[0].executeQuery();
+								if (rs.next()) {
+									if (rs.getString(1) == null) {
+										rs.close();
+										hashMap.get(index_local)[1].setString(1, cell_local.toString());
+										hashMap.get(index_local)[1].setInt(2, entry_id);
+										int result = hashMap.get(index_local)[1].executeUpdate();
+										if (result != 1) {
+											response.getWriter().write("添加词条失败!!!");
+											return;
+										}
+									} else if (rs.getString(1).equals(cell_local.toString())) {
+										rs.close();
+									} else {
+										System.out.println("confilct");
+										if (method.equals("create")) {
+											Comflict comflict = new Comflict();
+											comflict.setSheetName(sheet.getSheetName());
+											comflict.setTagName(tagName);
+											comflict.setEnglish(cell1.toString());
+											comflict.setLanguage(sheet.getRow(0).getCell(index_local).toString());
+											comflict.setOldTranslator(rs.getString(1));
+											comflict.setNewTranslator(cell_local.toString());
+											comflicts.add(comflict);
+										} else {
+											hashMap.get(index_local)[1].setString(1, cell_local.toString());
+											hashMap.get(index_local)[1].setInt(2, entry_id);
+											int result = hashMap.get(index_local)[1].executeUpdate();
+											if (result != 1) {
+												response.getWriter().write("添加词条失败!!!");
+												return;
+											}
+										}
+										rs.close();
+									}
+								} else {
+									rs.close();
+									pstmt3.setInt(1, entry_id);
+									int result = pstmt3.executeUpdate();
+									if (result != 1) {
+										response.getWriter().write("添加词条失败!!!");
+										return;
+									}
+									hashMap.get(index_local)[1].setString(1, cell_local.toString());
+									hashMap.get(index_local)[1].setInt(2, entry_id);
+									result = hashMap.get(index_local)[1].executeUpdate();
+									if (result != 1) {
+										response.getWriter().write("添加词条失败!!!");
+										return;
+									}
+								}
+							}
+						} else {
+							rs.close();
+							pstmt2.setString(1, cell1.toString());
+							int result = pstmt2.executeUpdate();
+							if (result != 1) {
+								response.getWriter().write("添加词条失败!!!");
+								return;
+							}
+							pstmt1.setString(1, cell1.toString());
+							rs = pstmt1.executeQuery();
+							if (rs.next()) {
+								entry_id = rs.getInt("id");
+							}
+							rs.close();
+							pstmt3.setInt(1, entry_id);
+							result = pstmt3.executeUpdate();
+							if (result != 1) {
+								response.getWriter().write("添加词条失败!!!");
+								return;
+							}
+							for (int index_local : hashMap.keySet()) {
+								XSSFCell cell_local = row.getCell(index_local);
+								if (cell_local == null || cell_local.toString().length() == 0) {
+									continue;
+								}
+								hashMap.get(index_local)[1].setString(1, cell_local.toString());
+								hashMap.get(index_local)[1].setInt(2, entry_id);
+								result = hashMap.get(index_local)[1].executeUpdate();
+								if (result != 1) {
+									response.getWriter().write("添加词条失败!!!");
+									return;
+								}
+							}
+						}
+					}
+					for (int index_local : hashMap.keySet()) {
+						for (PreparedStatement stmt : hashMap.get(index_local)) {
+							stmt.close();
+						}
+					}
+					hashMap.clear();
+				}
+			}
+		} catch (IOException | SQLException e) {
+			e.printStackTrace();
+		} finally {
+			close(rs);
+			close(pstmt0);
+			close(pstmt1);
+			close(pstmt2);
+			close(pstmt3);
+			close(conn);
+			close(fio);
+			close(workbook);
+			File file = new File(fileName);
+			file.delete();
+			if (comflicts.size() != 0) {
+				handleComflict(fileName, customName, comflicts, request);
+				handlerComflictFinish(true, response);
+			} else {
+				handlerComflictFinish(false, response);
+			}
+			if (createXML) {
+				try {
+					String local_var = fileName.substring(0, fileName.lastIndexOf("/") + 1);
+					Runtime.getRuntime()
+							.exec(new String[] { "/bin/sh", "-c", "cd " + local_var + ";tar -czf out.tar.gz " });
+					request.getSession(true).setAttribute("fileName",
+							fileName.substring(0, fileName.lastIndexOf("/") + 1) + "out.tar.gz");
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+
+			}
+
+		}
 	}
 
 	private void handlerComflictFinish(boolean comflict, HttpServletResponse response) {
@@ -631,7 +954,8 @@ public class HandlerServlet extends HttpServlet {
 	}
 
 	private void fillExcel(HttpServletRequest request, HttpServletResponse response) {
-		String fileName = downloadFile(request);
+		String directory = downloadFiles(request);
+		String files[] = new File(directory).list();
 		String customName = request.getParameter("customName");
 		HashSet<String> languages = new HashSet<>();
 		XSSFWorkbook workbook = null;
@@ -652,13 +976,14 @@ public class HandlerServlet extends HttpServlet {
 			rs.close();
 			pstmt.close();
 
-			fio = new FileInputStream(fileName);
+			fio = new FileInputStream(files[0]);
 			workbook = new XSSFWorkbook(fio);
 			Iterator<Sheet> iterator = workbook.iterator();
 			while (iterator.hasNext()) {
 				XSSFSheet sheet = (XSSFSheet) iterator.next();
 				if (!workbook.isSheetHidden(workbook.getSheetIndex(sheet))) {
 					HashMap<Integer, PreparedStatement> hashMap = new HashMap<>();
+					HashMap<Integer, HashSet<PreparedStatement> > hashMap1 = new HashMap<>();
 					int rowNums = sheet.getLastRowNum();
 					XSSFRow row = sheet.getRow(0);
 					int columns = row.getLastCellNum();
@@ -671,13 +996,25 @@ public class HandlerServlet extends HttpServlet {
 								response.getWriter().write("excel中包含客户不支持的语言!!!");
 								for (int index_local : hashMap.keySet()) {
 									hashMap.get(index_local).close();
+									for(PreparedStatement stmt:hashMap1.get(index_local)) {
+										close(stmt);
+									}
 								}
 								return;
 							}
 							String sql = "select " + translatorLanguage + " from entries," + customName
 									+ " where entries.id=" + customName + ".entry_id and entry_name=?";
+							PreparedStatement temp=conn.prepareStatement("select custom_name from custom,custom_language,language where language.id=custom_language.language_id and custom.id=custom_language.custom_id and language_name=?");
+							HashSet<PreparedStatement> hashSet = new HashSet<>();
+							rs = temp.executeQuery();
+							while(rs.next()){
+								hashSet.add(conn.prepareStatement("select "+translatorLanguage+" from entries,"+rs.getString("custom_name")+" where entries.id="+rs.getString("custom_name")+".entry_id and entry_name=?"));
+							}
+							close(rs);
+							close(temp);
 							PreparedStatement stmt = conn.prepareStatement(sql);
 							hashMap.put(i, stmt);
+							hashMap1.put(i, hashSet);
 						}
 					}
 					if (hashMap.size() == 0) {
@@ -702,18 +1039,41 @@ public class HandlerServlet extends HttpServlet {
 									cell_local = row.createCell(index_local);
 								}
 								cell_local.setCellValue(rs.getString(1));
+								rs.close();
 							}
-							rs.close();
+							else{
+								rs.close();
+								for(PreparedStatement stmt:hashMap1.get(index_local)){
+									stmt.setString(1, cell1.toString());
+									rs = hashMap.get(index_local).executeQuery();
+									if(rs.next()){
+										XSSFCell cell_local = row.getCell(index_local);
+										if (cell_local == null) {
+											cell_local = row.createCell(index_local);
+										}
+										cell_local.setCellValue(rs.getString(1));
+										close(rs);
+										break;
+									}
+									else{
+										close(rs);
+									}
+								}
+							}
+							
 						}
 					}
 					for (int index_local : hashMap.keySet()) {
 						hashMap.get(index_local).close();
+						for(PreparedStatement stmt:hashMap1.get(index_local)) {
+							close(stmt);
+						}
 					}
 				}
 			}
-			fos = new FileOutputStream(fileName);
+			fos = new FileOutputStream(files[0]);
 			workbook.write(fos);
-			request.getSession(true).setAttribute("fileName", fileName);
+			request.getSession(true).setAttribute("fileName", files[0]);
 			response.getWriter().write("补全Excel完成!!!");
 		} catch (SQLException | IOException e) {
 			e.printStackTrace();
@@ -738,6 +1098,7 @@ public class HandlerServlet extends HttpServlet {
 			for (String result : hashSet) {
 				String[] key_value = result.split(split);
 				if (key_value.length > 2) {
+					
 					father = document.createElement("string-array");
 					father.setAttribute("name", key_value[0]);
 					Element sub = null;
@@ -749,6 +1110,9 @@ public class HandlerServlet extends HttpServlet {
 					root.appendChild(father);
 
 				} else if (key_value.length == 2) {
+					if(key_value[0].contains(split)) {
+						//todo
+					}
 					father = document.createElement("string");
 					father.setAttribute("name", key_value[0]);
 					father.setTextContent(key_value[1]);
@@ -831,9 +1195,9 @@ public class HandlerServlet extends HttpServlet {
 		private XSSFSheet sheet = null;
 		private XSSFRow row = null;
 		private XSSFCell cell = null;
-		private String split="&_&";
+		private String split = "&_&";
 		private String key = "";
-		private String value="";
+		private String value = "";
 		private int index;
 		private String path;
 
@@ -871,19 +1235,16 @@ public class HandlerServlet extends HttpServlet {
 				cell = row.createCell(0);
 				cell.setCellValue(attributes.getValue("name"));
 				value = "";
-			}
-			else if(name.equals("item")){
+			} else if (name.equals("item")) {
 				value = "";
 				row = sheet.createRow(index++);
 				cell = row.createCell(0);
-				if(attributes.getValue("quantity")!=null){
-					cell.setCellValue(key+attributes.getValue("quantity"));
+				if (attributes.getValue("quantity") != null) {
+					cell.setCellValue(key + attributes.getValue("quantity"));
 				}
-			}
-			else if(name.equals("plurals")) {
+			} else if (name.equals("plurals")) {
 				key = attributes.getValue("name") + split;
-			}
-			else if (!name.equals("skip")){
+			} else if (!name.equals("skip")) {
 				value += "<" + name + " ";
 				for (int i = 0; i < attributes.getLength(); i++) {
 					value += attributes.getQName(i) + "=" + "\"" + attributes.getValue(i) + "\" ";
@@ -976,7 +1337,7 @@ public class HandlerServlet extends HttpServlet {
 		@Override
 		public void startElement(String arg0, String arg1, String name, Attributes attributes) throws SAXException {
 			super.startElement(arg0, arg1, name, attributes);
-			if (name.equals("string")||name.equals("string-array")) {
+			if (name.equals("string") || name.equals("string-array")) {
 				key = attributes.getValue("name");
 				value = "";
 				index = 0;
@@ -1001,16 +1362,16 @@ public class HandlerServlet extends HttpServlet {
 			super.endElement(uri, localName, qName);
 			if (qName.equals("item") || qName.equals("string")) {
 				try {
-					String local_key=key;
+					String local_key = key;
 					String english = null;
 					if (qName.equals("item")) {
-						if(!key.contains(split)){
+						if (!key.contains(split)) {
 							local_key += index;
 							index++;
 						}
-					} 
+					}
 					english = hashMap.get(local_key);
-					if(english == null){
+					if (english == null) {
 						return;
 					}
 					pstmt0.setString(1, english);
@@ -1032,7 +1393,8 @@ public class HandlerServlet extends HttpServlet {
 
 							} else {
 								if (method.equals("create")) {
-									XMLComflict comflict = new XMLComflict(local_key, english, language, oldValue, value);
+									XMLComflict comflict = new XMLComflict(local_key, english, language, oldValue,
+											value);
 									hashSet.add(comflict);
 								} else {
 									pstmt4.setString(1, value);
@@ -1050,7 +1412,7 @@ public class HandlerServlet extends HttpServlet {
 						}
 					} else {
 						rs.close();
-						
+
 						pstmt1.setString(1, english);
 						pstmt1.executeUpdate();
 						pstmt0.setString(1, english);
@@ -1100,7 +1462,7 @@ public class HandlerServlet extends HttpServlet {
 		@Override
 		public void startElement(String arg0, String arg1, String name, Attributes attributes) throws SAXException {
 			super.startElement(arg0, arg1, name, attributes);
-			if (name.equals("string")||name.equals("string-array")) {
+			if (name.equals("string") || name.equals("string-array")) {
 				key = attributes.getValue("name");
 				value = "";
 				index = 0;
@@ -1124,7 +1486,7 @@ public class HandlerServlet extends HttpServlet {
 		public void endElement(String uri, String localName, String qName) throws SAXException {
 			super.endElement(uri, localName, qName);
 			if (qName.equals("item") || qName.equals("string")) {
-				String local_key=key;
+				String local_key = key;
 				if (qName.equals("item")) {
 					if (!key.contains(split)) {
 						local_key = key + index;
@@ -1178,7 +1540,7 @@ public class HandlerServlet extends HttpServlet {
 			fillExcel(request, response);
 			break;
 		case "updateAndCreateXML":
-			addData(request, response, true);
+			updateAndCreateXML(request, response);
 			break;
 		case "xmltoexcel":
 			xmlToExcel(request, response);
