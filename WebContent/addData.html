@@ -6,7 +6,7 @@
 </script>
 </head>
 <body>
-<input type="file" id="fileUpload">
+<input type="file" id="fileUpload" multiple>
 <br><br>
 请选择客户:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<select id="select">
 </select>
@@ -15,6 +15,5 @@
 <input id="radio2" name="radio" type="radio" value="def" onchange="radioSelect(this)" /> 覆盖旧信息
 <br><br>
 <input type="button" id="commit" value="commit" onclick="send()">
-
 </body>
 </html>

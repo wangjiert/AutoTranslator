@@ -17,8 +17,9 @@ function send() {
 		return;
 	}
 	var fd = new FormData();
-	fd.append("fileUpload", file.files[0]);
+	fd.append("fileUpload0", file.files[0]);
 	fd.append("cmd", "xmltoexcel");
+	fd.append("fileCount",1);
 	xhr.open("POST", "manager.do");
 	xhr.onreadystatechange = onReady;
 	xhr.send(fd);
