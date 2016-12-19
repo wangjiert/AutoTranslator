@@ -53,17 +53,17 @@ import org.xml.sax.helpers.DefaultHandler;
 
 import com.mchange.v2.c3p0.ComboPooledDataSource;
 
-@MultipartConfig(location = "/home/wangjie/temp")
+@MultipartConfig(location = "/home/apache-tomcat/apache-tomcat-7.0.54/webapps/AutoTranslator/temp")
 public class HandlerServlet extends HttpServlet {
 	private static final long serialVersionUID = 1L;
-	private static final String filePath = "/home/wangjie/temp/";
+	private static final String filePath = "/home/apache-tomcat/apache-tomcat-7.0.54/webapps/AutoTranslator/temp";
 	private static final String split = "&_&";
 	private static final String split1 = "&__&";
 	private static final ComboPooledDataSource ds;
 	private Random random = new Random();
 	static {
 		ds = new ComboPooledDataSource();
-		try (FileInputStream fis = new FileInputStream("/home/wangjie/temp/database.properties");) {
+		try (FileInputStream fis = new FileInputStream("/home/apache-tomcat/apache-tomcat-7.0.54/webapps/AutoTranslator/database.properties");) {
 			Properties p = new Properties();
 			p.load(fis);
 			ds.setDriverClass(p.getProperty("driverClass"));
@@ -360,6 +360,67 @@ public class HandlerServlet extends HttpServlet {
 		return (directory.getAbsolutePath() + File.separator);
 	}
 
+	private boolean combineComflict(String filename,String customName) {
+		FileInputStream fio = null;
+		XSSFWorkbook workbook = null;
+		Connection conn = null;
+		PreparedStatement pstmt = null;
+		try{
+			conn = ds.getConnection();
+			fio = new FileInputStream(filename);
+			workbook = new XSSFWorkbook(fio);
+			Iterator<Sheet> iterator = workbook.iterator();
+			while (iterator.hasNext()) {
+				XSSFSheet sheet = (XSSFSheet) iterator.next();
+				if (!workbook.isSheetHidden(workbook.getSheetIndex(sheet))) {
+					HashMap<String, Integer> hashMap = new HashMap<>();
+					int rowNums = sheet.getLastRowNum();
+					XSSFRow row = sheet.getRow(0);
+					int columns = row.getLastCellNum();
+					XSSFCell cell = null;
+					for (int i = 0; i <= columns; i++) {
+						cell = row.getCell(i);
+						if(cell.toString().equals("new value")){
+							hashMap.put("new value", i);
+						}
+						else if(cell.toString().equals("language")) {
+							hashMap.put("language", i);
+						}
+						else if(cell.toString().equals("old value")) {
+							hashMap.put("language", i);
+						}
+					}
+					for (int i = 1; i <= rowNums; i++) {
+						row = sheet.getRow(i);
+						if (row == null) {
+							continue;
+						}
+						 cell = row.getCell(hashMap.get("language"));
+						 String sql = "update "+customName+" set "+cell.toString()+"=? where "+cell.toString()+"=?";
+						 pstmt = conn.prepareStatement(sql);
+						 pstmt.setString(1, row.getCell(hashMap.get("new value")).toString());
+						 pstmt.setString(1, row.getCell(hashMap.get("old value")).toString());
+						 int result = pstmt.executeUpdate();
+						 if(result!=1){
+							 return false;
+						 }
+						close(pstmt);
+					}
+				}
+			}
+		}
+		catch(IOException | SQLException e){
+			e.printStackTrace();
+		}
+		finally{
+			close(fio);
+			close(workbook);
+			close(pstmt);
+			close(conn);
+		}
+		return true;
+	}
+	
 	private void updateDBByXML(HttpServletRequest request, HttpServletResponse response) {
 		String customName = request.getParameter("customName");
 		String method = request.getParameter("method");
@@ -380,6 +441,14 @@ public class HandlerServlet extends HttpServlet {
 		try {
 			String directory = downloadFiles(request);
 			File file = new File(directory);
+			if(file.list()[0].endsWith(".xlsx")){
+				if(combineComflict(directory+file.list()[0], customName)){
+					response.getWriter().write("Successed");
+				}else {
+					response.getWriter().write("Failed");
+				}
+				return;
+			}
 			String[] englishFile = file.list(new FilenameFilter() {
 				public boolean accept(File dir, String name) {
 					if (name.equalsIgnoreCase("english.xml")) {
